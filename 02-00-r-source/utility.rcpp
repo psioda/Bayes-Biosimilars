@@ -1,0 +1,154 @@
+
+
+require(mvtnorm);
+require(Rcpp);
+require(RcppArmadillo);
+
+
+
+## create R function to identify scale parameter via numerical grid search;
+
+
+
+
+sourceCpp(code='
+ 
+// [[Rcpp::depends(RcppArmadillo)]]
+// [[Rcpp::depends(RcppEigen)]]
+// [[Rcpp::depends(RcppNumerical)]]
+   
+#include <RcppArmadillo.h>
+#include <RcppNumerical.h>   
+
+using namespace Rcpp;
+using namespace Numer;  
+
+// utility functions;
+double abs(double x) { if (x<0) { return -1.0*x; } return x; }
+
+// [[Rcpp::export]]
+Rcpp::List calc_scale(arma::vec eqm, double pi0, double max_scale=10, double scale_increment=0.0000001, double scale_tol=0.0001 )
+{
+	
+      int sMax  = max_scale / scale_increment;
+      int J = eqm.n_rows;
+
+	arma::vec sd(J);
+      arma::vec sc(J);
+      arma::vec pi(J);
+
+      double scale;
+      double pi0_est;
+
+	for (int j = 0; j < J;    j++)
+      {
+	   for (int s = 0; s < sMax; s++)
+         {
+            scale   = (s+1)*scale_increment;
+            pi0_est = R::pnorm(eqm[j],0,scale*eqm[j],1,0) - R::pnorm(-eqm[j],0,scale*eqm[j],1,0);
+
+		if (abs(pi0_est-pi0) < scale_tol) { s=sMax; }
+         }
+         sd[j] = scale*eqm[j];
+         sc[j] = scale;
+         pi[j] = pi0_est;
+      }
+      return Rcpp::List::create(
+                                 Rcpp::Named("cpp.sd")     = sd,
+                                 Rcpp::Named("cpp.kappa")  = sc,
+                                 Rcpp::Named("cpp.pi.est") = pi
+		);
+}
+
+class bvn_integrand: public Func
+{
+    private:
+       double eqmj; 
+       double eqmk;
+       double sdj;   
+       double sdk;
+       double rho;
+			
+    public:
+       bvn_integrand(double eqmj_,       double eqmk_,       double sdj_,      double sdk_,      double rho_) : 
+                            eqmj(eqmj_),        eqmk(eqmk_),        sdj(sdj_),        sdk(sdk_),        rho(rho_) {}
+
+			double operator()(const double & x) const
+			{
+				double mu = rho*sdk/sdj*x;
+                        double sd = sdk * pow(1-pow(rho,2),0.5);
+
+
+				return (  (R::pnorm(eqmk,mu,sd,1,0) - R::pnorm(-eqmk,mu,sd,1,0)) * R::dnorm(x,0,sdj,0)) ;
+			}
+};  
+
+double integrate_bvn(double eqmj, double eqmk, double sdj, double sdk, double rho)
+	{
+		const double lower = -eqmj, upper = eqmj;
+
+		bvn_integrand f(eqmj,eqmk,sdj,sdk,rho);
+
+		double err_est;
+		int err_code;
+		const double res = integrate(f, lower, upper, err_est, err_code);
+		
+		return res;
+	}    
+
+
+
+// [[Rcpp::export]]
+Rcpp::List calc_cpp(arma::vec eqm, double pi0, double pi1, 
+                    double max_scale=10, double scale_increment=0.0000001, double scale_tol=0.0001,
+                    double min_rho=0, double max_rho=0.99, double rho_increment=0.00001, double rho_tol=0.0001 )
+{
+   Rcpp::List A = calc_scale(eqm,pi0,max_scale,scale_increment,scale_tol);
+
+   arma::vec sd = A[0];
+   double pi    = pi0*pi1;
+
+   int rMax  = (max_rho - min_rho) / rho_increment;
+
+   double rho;
+   double pi_est;
+
+   if (pi1>pi0+0.0001)
+   {
+     for (int r = 0; r < rMax; r++)
+     {
+	  rho           = min_rho + r*rho_increment;
+        pi_est        = integrate_bvn(eqm[0],eqm[1],sd[0],sd[1],rho);
+        if (abs(pi_est-pi) < rho_tol) { r=rMax; }
+     }
+   }
+   else 
+   {
+      rho=0;
+   }
+      return Rcpp::List::create(
+                                 Rcpp::Named("cpp.sd")          = A[0],
+                                 Rcpp::Named("cpp.kappa")       = A[1],
+                                 Rcpp::Named("cpp.pi.est")      = A[2], 
+                                 Rcpp::Named("cpp.rho")         = rho,
+                                 Rcpp::Named("cpp.pi.cond.est") = pi_est/pi0
+		                   );
+
+}
+'
+)
+
+
+if (FALSE) { calc_scale(eqm=c(0.5,0.6),pi0=0.80,         max_scale=2,scale_increment=0.00001,scale_tol=0.0001) }
+if (FALSE) { 
+
+calc_cpp( eqm=c(log(2),0.6),pi0=0.60,pi1=0.90,max_scale=2,scale_increment=0.000001,scale_tol=0.00001,min_rho=0.0,max_rho=0.99,rho_increment=0.000001,rho_tol=0.000001) 
+
+
+}
+
+
+
+
+
+

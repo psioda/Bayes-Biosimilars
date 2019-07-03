@@ -1,0 +1,278 @@
+1                                                          The SAS System                              22:13 Thursday, June 20, 2019
+
+NOTE: Unable to open SASUSER.REGSTRY. WORK.REGSTRY will be opened instead.
+NOTE: All registry changes will be lost at the end of the session.
+
+WARNING: Unable to copy SASUSER registry to WORK registry. Because of this, you will not see registry customizations during this 
+         session.
+NOTE: Unable to open SASUSER.PROFILE. WORK.PROFILE will be opened instead.
+NOTE: All profile changes will be lost at the end of the session.
+NOTE: Copyright (c) 2002-2012 by SAS Institute Inc., Cary, NC, USA. 
+NOTE: SAS (r) Proprietary Software 9.4 (TS1M3) 
+      Licensed to UNIVERSITY OF NORTH CAROLINA CHAPEL HILL - SFA T&R, Site 70084073.
+NOTE: This session is executing on the Linux 3.10.0-957.el7.x86_64 (LIN X64) platform.
+
+
+
+NOTE: Updated analytical products:
+      
+      SAS/STAT 14.1
+      SAS/ETS 14.1
+      SAS/OR 14.1
+      SAS/IML 14.1
+      SAS/QC 14.1
+
+NOTE: Additional host information:
+
+ Linux LIN X64 3.10.0-957.el7.x86_64 #1 SMP Thu Oct 4 20:48:51 UTC 2018 x86_64 Red Hat Enterprise Linux Server release 7.6 (Maipo) 
+
+You are running SAS 9. Some SAS 8 files will be automatically converted 
+by the V9 engine; others are incompatible.  Please see 
+http://support.sas.com/rnd/migration/planning/platform/64bit.html
+
+PROC MIGRATE will preserve current SAS file attributes and is 
+recommended for converting all your SAS libraries from any 
+SAS 8 release to SAS 9.  For details and examples, please see
+http://support.sas.com/rnd/migration/index.html
+
+
+This message is contained in the SAS news file, and is presented upon
+initialization.  Edit the file "news" in the "misc/base" directory to
+display site-specific news and information in the program log.
+The command line option "-nonews" will prevent this display.
+
+
+
+
+NOTE: SAS initialization used:
+      real time           0.21 seconds
+      cpu time            0.03 seconds
+      
+1          %macro setup(program,user);
+2          
+3            option ls=150 ps=90;
+4            /** close ODS destinations **/
+5            ods html close;
+6            ods listing close;
+7          
+8            /** clear work library **/
+9            proc datasets library=work noprint kill; run; quit;
+10         
+2                                                          The SAS System                              22:13 Thursday, June 20, 2019
+
+11           /** delete local macro variables **/
+12           data vars;
+13             set sashelp.vmacro;
+14           run;
+15           data _null_;
+16             set vars;
+17             temp=lag(name);
+18             if scope='GLOBAL' and substr(name,1,3) ne 'SYS' and temp ne name then
+19               call execute('%symdel '||trim(left(name))||';');
+20           run;
+21         
+22           /** obtain location of SAS program (requires program to be saved) **/
+23           /** also create needed macro variables for various SAS libraries **/
+24           %global ROOT FILE_PATH IML_PATH MACRO_PATH OUT_PATH RES_PATH;
+25           data te;
+26            set sashelp.vextfl;
+27            where find(upcase(xPath),upcase("&program"));
+28         
+29            filePath = substr(xPath,1,index(xPath,"&program")-1);
+30            outPath  = tranwrd(filePath,'PROGRAMS','OUTPUT');
+31            root     = substr(xPath,1,index(xPath,"github") + length("github"));
+32         
+33            call symput('ROOT'     ,strip(root));
+34            call symput('FILE_PATH',strip(filePath));
+35            call symput('SLASH'    ,strip(substr(strip(reverse(root)),1,1)));
+36           run;
+37         
+38         
+39         
+40            x "cd &ROOT.";
+41            %if &SYSSCP = WIN %then %do;
+42               filename folders pipe 'dir /A:D/B/S';
+43            %end;
+44            %else %do;
+45               filename folders pipe 'ls -d * ';
+46            %end;
+47         
+48            data directories;
+49              length path $500;
+50              infile folders dlmstr="$#&#&#";
+51              input path;
+52         	   %if &SYSSCP = WIN %then %do;
+53                 if find(path,'00-sas-macros','i')  then call symput('MACRO_PATH',strip(strip(path)||"&slash."));
+54                 if find(path,'output','i')         then call symput('OUT_PATH',strip(strip(path)||"&slash."));
+55                 if find(path,'sas-data','i')       then call symput('RES_PATH',strip(strip(path)||"&slash."));
+56         	   %end;
+57         	   %else %do;
+58                 if find(path,'00-sas-macros','i')  then call symput('MACRO_PATH',strip("&root."||strip(path)||"&slash."));
+59                 if find(path,'output','i')         then call symput('OUT_PATH',strip("&root."||strip(path)||"&slash."));
+60                 if find(path,'sas-data','i')       then call symput('RES_PATH',strip("&root."||strip(path)||"&slash."));
+61         	   %end;
+62            run;
+63         
+64            libname input   "&RES_PATH." access=read;
+65            libname results "&RES_PATH.";
+66            libname output  "&OUT_PATH.";
+67         
+68         
+3                                                          The SAS System                              22:13 Thursday, June 20, 2019
+
+69            %put &=ROOT;
+70            %put &=FILE_PATH;
+71            %put &=MACRO_PATH;
+72            %put &=OUT_PATH;
+73            %put &=RES_PATH;
+74         
+75            %if &SYSSCP = WIN & &sysparm= %then %let sysparm=1;
+76         
+77            %include"&macro_path.simdata.sas";
+78            %include"&macro_path.samplingprior.sas";
+79            %include"&macro_path.fitcpp.sas";
+80         %mend;
+81         
+82         %setup(06-Estimate-Design-Properties.sas,Psioda);
+NOTE: Deleting WORK.PROFILE (memtype=CATALOG).
+NOTE: File WORK.PROFILE (memtype=CATALOG) cannot be deleted because it is in use.
+NOTE: Deleting WORK.REGSTRY (memtype=ITEMSTOR).
+NOTE: File WORK.REGSTRY (memtype=ITEMSTOR) cannot be deleted because it is in use.
+NOTE: Deleting WORK.SASMACR (memtype=CATALOG).
+NOTE: File WORK.SASMACR (memtype=CATALOG) cannot be deleted because it is in use.
+NOTE: PROCEDURE DATASETS used (Total process time):
+      real time           0.01 seconds
+      cpu time            0.00 seconds
+      
+
+NOTE: There were 70 observations read from the data set SASHELP.VMACRO.
+NOTE: The data set WORK.VARS has 70 observations and 4 variables.
+NOTE: DATA statement used (Total process time):
+      real time           0.06 seconds
+      cpu time            0.02 seconds
+      
+
+
+NOTE: There were 70 observations read from the data set WORK.VARS.
+NOTE: DATA statement used (Total process time):
+      real time           0.02 seconds
+      cpu time            0.00 seconds
+      
+
+
+NOTE: There were 1 observations read from the data set SASHELP.VEXTFL.
+      WHERE FIND(UPCASE(xPath), '06-ESTIMATE-DESIGN-PROPERTIES.SAS');
+NOTE: The data set WORK.TE has 1 observations and 12 variables.
+NOTE: DATA statement used (Total process time):
+      real time           0.01 seconds
+      cpu time            0.01 seconds
+      
+
+
+NOTE: The infile FOLDERS is:
+      Pipe command="ls -d * "
+
+NOTE: 11 records were read from the infile FOLDERS.
+      The minimum record length was 14.
+      The maximum record length was 18.
+NOTE: The data set WORK.DIRECTORIES has 11 observations and 1 variables.
+NOTE: DATA statement used (Total process time):
+      real time           0.02 seconds
+      cpu time            0.00 seconds
+      
+
+NOTE: Libref INPUT was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /proj/psiodalab/projects/bayesDesignSimilars/github/03-03-sas-data
+NOTE: Libref RESULTS refers to the same physical library as INPUT.
+NOTE: Libref RESULTS was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /proj/psiodalab/projects/bayesDesignSimilars/github/03-03-sas-data
+NOTE: Libref OUTPUT was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /proj/psiodalab/projects/bayesDesignSimilars/github/03-02-sas-output
+ROOT=/proj/psiodalab/projects/bayesDesignSimilars/github/
+FILE_PATH=/proj/psiodalab/projects/bayesDesignSimilars/github/03-01-sas-programs/
+MACRO_PATH=/proj/psiodalab/projects/bayesDesignSimilars/github/03-00-sas-macros/
+OUT_PATH=/proj/psiodalab/projects/bayesDesignSimilars/github/03-02-sas-output/
+RES_PATH=/proj/psiodalab/projects/bayesDesignSimilars/github/03-03-sas-data/
+268        
+269        %let nSim = 5000;
+270        %let phi  = 0.95;
+271        
+272        data node_simulation_settings;
+273         set input.Simulation1_settings;
+274         where node_idx = &sysparm.;
+275         call symput('nLoops',strip(put(_n_,best.)));
+276        run;
+
+NOTE: There were 6 observations read from the data set INPUT.SIMULATION1_SETTINGS.
+      WHERE node_idx=1;
+4                                                                   The SAS System                                       22:13 Thursday, June 20, 2019
+
+NOTE: The data set WORK.NODE_SIMULATION_SETTINGS has 6 observations and 20 variables.
+NOTE: DATA statement used (Total process time):
+      real time           0.12 seconds
+      cpu time            0.00 seconds
+      
+
+277        
+278        
+279        %macro nodeLoop;
+280        
+281          data _null_;
+282           call symput('start',strip(put(time(),best.)));
+283          run;
+284        
+285        %do q = 1 %to &nLoops.;
+286        
+287          %put %upcase(no)TE: Iteration &q Starting.;
+288        
+289        	 option nonotes;
+290        
+291        	 data design_inputs;
+292        	  set node_simulation_settings(obs=&q. firstobs=&q.);
+293        
+294        	   sp = upcase(cats(strip(put(sp1,best.)),sp2));
+295        
+296        	   call symput('seed1',strip(put(seed1,best.)));
+297        	   call symput('seed2',strip(put(seed2,best.)));
+298        	   call symput('seed3',strip(put(seed3,best.)));
+299        	   call symput('npg', catx(' ',put(npg1,best.),put(npg2,best.)));
+300        	   call symput('eqm', catx(' ',put(eqm1,best.),put(eqm2,best.)));
+301        	   call symput('sp',strip(sp));
+302        	   call symput('sd1',strip(put(sd1,best.)));
+303        	   call symput('sd2',strip(put(sd2,best.)));
+304        	   call symput('rho',strip(put(rho,best.)));
+305        	   call symput('pi0',strip(put(pi0,best.)));
+306        	   call symput('pi1',strip(put(pi1,best.)));
+307        	 run;
+308        
+309          %samplingPrior;
+310          %simData;
+311          %fitcpp;
+312        
+313          proc append data = design_outputs base=design_properties_%sysfunc(putn(&sysparm.,z4.)) force; run; quit;
+314        
+315          data _null_;
+316            call symput('stop',strip(put(time(),best.)));
+317          run;
+318        
+319          option notes;
+320          %put %upcase(no)TE: Iteration &q Finished -- Elapsed Time = %sysevalf( (&stop-&start)/60 ) minutes.;
+321        
+322          data results.design_properties_%sysfunc(putn(&sysparm.,z4.));
+323           set design_properties_%sysfunc(putn(&sysparm.,z4.));
+324          run;
+325        
+326        %end;
+327        %mend;
+328        %nodeLoop;
+
+NOTE: DATA statement used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.01 seconds
+      
+
+NOTE: Iteration 1 Starting.
+WARNING: No output destinations active.

@@ -1,0 +1,410 @@
+
+
+require(mvtnorm);
+require(Rcpp);
+require(RcppArmadillo);
+
+
+
+## create R function to identify scale parameter via numerical grid search;
+
+
+
+
+sourceCpp(code='
+ 
+// [[Rcpp::depends(RcppArmadillo)]]
+#include <RcppArmadillo.h>
+#include <cmath>
+using namespace Rcpp;
+  
+
+// utility functions;
+double abs(double x)      { if (x<0) { return -1.0*x; } return x; }
+double logit(double x)    { return log(x) - log(1-x);             }
+double logistic(double x) { return exp(x) / ( 1 + exp(x) );       }
+
+
+// [[Rcpp::export]]
+double logPostBHM(arma::vec parms, arma::ivec dType, arma::mat dat, double gamma0, double tau0, double alpha0, double beta0)
+{
+  // compute posterior contribution for cpp prior;
+  double logPost = 0;
+
+  // determine number of indications;
+  int J = dType.size();  
+
+  // integer index for parameter vector location;
+  int idx = 0;
+
+  double tau   = parms[parms.size()-1]; 
+  double gamma = parms[parms.size()-2];
+
+  double mu;
+  int s;
+  for (int j=0;j<J;j++) { 
+
+     if (dType(j)==0) {   
+         s        = 0;
+         mu       = logistic(parms(idx));
+         logPost += dat(j,1+s)*log(mu) + (dat(j,0+s)-dat(j,1+s))*log(1-mu); 
+
+         s        = 3;
+         mu       = logistic(parms(idx)+parms(idx+1));
+         logPost += dat(j,1+s)*log(mu) + (dat(j,0+s)-dat(j,1+s))*log(1-mu); ; 
+
+         logPost += -0.5*log(2*M_PI) - log(tau) - 0.5/pow(tau,2)*pow(parms(idx+1)-gamma,2);
+
+         idx+=2;
+     }
+     else if (dType(j)==1) {  
+         s        = 0; 
+         mu       = parms(idx);
+         logPost += -dat(j,0+s)*log(parms(idx+2)) - 0.5*dat(j,0+s)/pow(parms(idx+2),2)*(dat(j,2+s) - 2*dat(j,1+s)*mu + pow(mu,2)); 
+
+         s        = 3;
+         mu       = parms(idx)+parms(idx+1);
+         logPost += -dat(j,0+s)*log(parms(idx+2)) - 0.5*dat(j,0+s)/pow(parms(idx+2),2)*(dat(j,2+s) - 2*dat(j,1+s)*mu + pow(mu,2)); 
+     
+         logPost += -0.5*log(2*M_PI) - log(tau) - 0.5/pow(tau,2)*pow(parms(idx+1)-gamma,2);
+
+         idx+=3;
+     }
+  }
+
+  logPost   += -0.5*log(2*M_PI) - log(tau0) - 0.5/pow(tau0,2)*pow(gamma-gamma0,2);
+  logPost   +=  (alpha0 - 1)*log(tau) - beta0*tau;
+
+  return logPost;
+}
+
+arma::vec slice_fcs_BHM( double (*logfn)(arma::vec parms, arma::ivec dType, arma::mat dat,
+                         double gamma0, double tau0, double alpha0, double beta0),
+                                     arma::vec parms, 
+                                     const arma::ivec & dType,
+                                     const arma::mat & dat, 
+                                     const double & gamma0, 
+                                     const double & tau0, 
+                                     const double & alpha0, 
+                                     const double & beta0,
+                                     const arma::vec & wv,
+                                     const arma::vec & lowerv,
+                                     const arma::vec & upperv,
+                                     const int m = 10) 
+{
+	int P = parms.n_rows;
+	double b0, f0, f0_L, f0_R, f0_x1, h0, L, R, V, J, K,w,lower,upper;
+	  
+		for (int p = 0; p < P; p++) 
+		{
+			// create vector of parameters to modify for slice sampling;
+			arma::vec parm0 = parms;
+
+            w     = wv[p];
+            lower = lowerv[p];
+            upper = upperv[p];
+                
+			if (lower==upper)
+			{
+				parms(p) = lower;
+			}
+            else
+            {
+			  // current value of the parameter in question;
+			  b0 = parm0(p);
+			
+			  // calculate current full conditional value;
+			  f0 = logfn(parm0,dType,dat,gamma0,tau0,alpha0,beta0);
+
+			  // calculate height of the horizontal slice;
+			  h0 = f0 - ::Rf_rexp(1.0);		
+
+			  // Calculate initial horizontal interval;
+			  L = parm0(p) - ::Rf_runif(0.0,1.0)*w;
+			  R = L+w;  
+
+			  L = std::max(L,lower);
+			  R = std::min(R,upper);
+			  
+			  // Step out;
+			  V = ::Rf_runif(0.0,1.0);
+			  J = floor(m*V);
+			  K = (m-1)-J;	
+
+			  parm0(p) = L; f0_L = logfn(parm0,dType,dat,gamma0,tau0,alpha0,beta0);
+			  parm0(p) = R; f0_R = logfn(parm0,dType,dat,gamma0,tau0,alpha0,beta0); 
+
+			  while(J>0 and h0<f0_L and L>=lower)
+			  {
+				L        = L-w; if (L<=lower) {L=lower;}
+				J        = J-1;
+				parm0(p) = L; 
+				f0_L     = logfn(parm0,dType,dat,gamma0,tau0,alpha0,beta0);
+			  }
+			  while(K>0 and h0<f0_R and R<=upper)
+			  {
+				R        = R+w; if (R>=upper) {R=upper;}
+				K        = K-1;
+				parm0(p) = R; 
+				f0_R     = logfn(parm0,dType,dat,gamma0,tau0,alpha0,beta0);
+			  }			
+
+
+			  // perform rejection sampling;
+			  int stop  = 0;
+			  while(stop == 0)
+			  {
+				parm0(p)     = L + ::Rf_runif(0.0,1.0)*(R-L);
+				f0_x1        = logfn(parm0,dType,dat,gamma0,tau0,alpha0,beta0);
+
+				if      ( h0       <  f0_x1 ) { parms(p) = parm0(p); stop = 1;  }
+				else if ( parm0(p) <  b0    ) { L = parm0(p);                   }
+				else if ( parm0(p) >= b0    ) { R = parm0(p);                   }
+				
+				if (-0.0000000001 <= L-R and L-R <= 0.0000000001)
+				{
+					parms(p)= 0.5*(L+R);
+					stop      = 1;
+				}
+			  }
+            }		
+		}
+	return parms;
+}
+
+// [[Rcpp::export]]
+arma::mat fitBHM(arma::ivec dType, arma::mat dat, double gamma0, double tau0, double alpha0, double beta0, int nMC, int nBI)
+{
+    
+  // Determine number of indications;	
+  int J = dType.n_rows;
+
+  // Construct & initialize parameter vector;
+  int P = 0;
+  for (int j=0;j<J;j++) {  P += (dType(j)==0)*2 + (dType(j)==1)*3; }
+  P+=2;
+
+  arma::vec parms(P);
+  arma::vec wv(P);
+  arma::vec lowerv(P);
+  arma::vec upperv(P);   
+
+  int idx = 0;
+  for (int j=0;j<J;j++) {  
+   if (dType(j)==0) 
+   { 
+     parms[idx]    = logit((dat(j,1)+0.5)/(dat(j,0)+1.0)); wv[idx]   =   0.50;  lowerv[idx]   =  -50; upperv[idx]   = 50;
+     parms[idx+1]  = 0;                                    wv[idx+1] =   0.50;  lowerv[idx+1] =  -50; upperv[idx+1] = 50;                
+     idx          += 2; 
+   }
+   else if (dType(j)==1) 
+   { 
+     parms[idx]    = dat(j,1);          wv[idx]   =   0.50; lowerv[idx]   =  -50;   upperv[idx]   = 50;    
+     parms[idx+1]  = 0;                 wv[idx+1] =   0.50; lowerv[idx+1] =  -50;   upperv[idx+1]   = 50; 
+     parms[idx+2]  = 1;                 wv[idx+2] =   0.50; lowerv[idx+2] = 0.0001; upperv[idx+2] = 500; 
+     idx          += 3; 
+   }
+  }  
+     parms[idx]    = 0.0;               wv[idx]   =   0.50; lowerv[idx  ] = -50;       upperv[idx]   = 50;
+     parms[idx+1]  = 0.5;               wv[idx+1] =   0.50; lowerv[idx+1] = 0.0001;    upperv[idx+1] = 500;
+
+
+  // Construct container for samples;
+  arma::mat samples(nMC,P);
+
+  for (int s=-nBI;s<nMC;s++) 
+  {
+      parms = slice_fcs_BHM(logPostBHM,parms,dType,dat,gamma0,tau0,alpha0,beta0,wv,lowerv,upperv);
+
+	if (s>=0)
+      {
+          samples.row(s) = parms.t();
+      }
+  }
+  return(samples);
+}
+
+arma::mat genDat(arma::ivec & dType, arma::rowvec & gParm, arma::ivec & npg)
+{
+   int J = dType.n_rows;
+
+   arma::mat dat(J,3*J,arma::fill::zeros);
+
+   int p=0;
+   double mean,x,y,yy;
+   
+   for (int j=0; j<J; j++)
+   {
+     for (int t=0;t<=1;t++)
+     {
+        if (dType[j]==0)      { mean = std::max(std::min(gParm[p] + gParm[p+1]*(t==1),0.9999),0.0001); }
+        else if (dType[j]==1) { mean =                   gParm[p] + gParm[p+1]*(t==1);                 } 
+             
+        if (dType[j]==0) 
+        {
+            x = R::rbinom(npg[j],mean);
+            dat(j,0 + t*3) = npg[j];
+            dat(j,1 + t*3) = x;
+            dat(j,2 + t*3) = pow(x,2);
+        }
+        else 
+        {
+            y = 0; yy = 0;
+            for (int n=0;n<npg[j];n++)
+            {
+               x  = R::rnorm(mean,gParm[p+2]);
+               y += x;
+               yy += pow(x,2);
+            } 
+            dat(j,0 + t*3) = npg[j];
+            dat(j,1 + t*3) = y/npg[j];
+            dat(j,2 + t*3) = yy/npg[j];
+        }
+      }
+      if (dType[j]==0)      { p+=2; } 
+      else if (dType[j]==1) { p+=3; } 
+   }
+   return dat;
+}
+
+arma::rowvec processSamples(arma::mat & samp, arma::ivec & dType, int & P,arma::vec & eqm)
+{
+   int nMC = samp.n_rows;
+   int J   = dType.size();
+
+   arma::rowvec studyResults(P+2*J+2,arma::fill::zeros);
+
+   // compute posterior means;
+   arma::mat col_means = sum(samp)/nMC;
+   for (int p=0;p<P;p++)
+   {
+      studyResults[p] = col_means(0,p); 
+   }
+   
+   arma::mat rej(nMC,J);
+   arma::vec gRej(nMC,arma::fill::zeros);
+
+   int p,g;
+   for (int m=0;m<nMC;m++)
+   {
+      p=0;
+      g=0;
+   	for (int j=0; j<J; j++)
+      {
+         int r;
+
+         if      (dType[j]==0) { r=(abs(  logistic(samp(m,p)) - logistic(samp(m,p+0)+samp(m,p+1))  )<eqm[j]); } 
+         else if (dType[j]==1) { r=(abs(  samp(m,p+1)                                              )<eqm[j]); } 
+
+         rej(m,j) = r;
+         g       += r;
+
+         if      (dType[j]==0) { p+=2; } 
+         else if (dType[j]==1) { p+=3; } 
+      }
+	gRej[m] = (g==J);
+   }
+
+   for (int j=0; j<J; j++)
+   {
+      double r = (double) sum(rej.col(j))/nMC;
+      studyResults[P+j]   = r;
+      studyResults[P+J+j] = (r>0.95);
+   }
+   double r = (double) sum(gRej)/nMC;
+   studyResults[P+2*J]   = r;
+   studyResults[P+2*J+1] = (r>0.95);
+
+   return studyResults;
+}
+
+
+// [[Rcpp::export]]
+arma::mat estBHMDesign(arma::ivec dType, arma::mat sp, arma::ivec npg, arma::vec eqm, 
+                       double gamma0, double tau0, double alpha0, double beta0, int nSIM, int nMC, int nBI)
+{
+
+     // Determine number of indications;	
+     int J = dType.n_rows;
+
+     // Determine number of sampling prior components;
+     int R = sp.n_rows;
+
+     // Count number of parameters;
+     int P = 0;
+     for (int j=0;j<J;j++) {  P += (dType(j)==0)*2 + (dType(j)==1)*3; }
+     P+=2;     
+     int Q = P + 2*J + 2;
+
+     // create container for simulation results;
+     arma::mat studyResults(nSIM,Q,arma::fill::zeros); 
+
+     for (int i=0; i<nSIM; i++)
+     {
+         // select parameter value;
+         int s = (int) R::runif(0,R);         
+         arma::rowvec gParm = sp.row(s);
+
+         // generate data;
+         arma::mat dat = genDat(dType,gParm,npg);
+
+         // fit model with CPP;
+         arma::mat samp = fitBHM(dType,dat,gamma0,tau0,alpha0,beta0,nMC,nBI);
+
+         // process MCMC samples;
+         studyResults.row(i) = processSamples(samp,dType,P,eqm);
+     }
+     return mean(studyResults);     
+}
+
+'
+)
+
+
+if (FALSE){
+set.seed(341);
+dType  = c(0,1,1);
+sp     = matrix(c(0.81,0.00,0.00,0.60,1.4,0.0,-0.6,1.4),1,8);
+npg    = c(300,120,150);
+gamma0 = 0.0;
+tau0   = 100;
+alpha0 = 2;
+beta0  = 2;
+
+eqm   = c(0.1,0.6,0.6);
+nSIM  = 100;
+nMC   = 10000;
+nBI   = 100;
+
+
+x=estBHMDesign(dType,sp,npg,eqm,gamma0,tau0,alpha0,beta0,nSIM,nMC,nBI);
+x;
+}
+
+if (FALSE) {
+set.seed(341);
+
+dType  = c(0,1,1);
+dat = matrix(c(
+50,37,0,50,37,0, 
+50,0.0420285532,1.6711854297,50,-0.219825316,1.7586971062, 
+50,-0.004248709,1.8344913622,50,-0.398258024,1.8773375004   
+  ),3,6,byrow=T)
+
+npg    = c(300,120,150);
+gamma0 = 0.0;
+tau0   = 100;
+alpha0 = 2;
+beta0  = 2;
+
+eqm   = c(0.1,0.6,0.6);
+nSIM  = 100;
+nMC   = 10000;
+nBI   = 100;
+
+
+fitBHM(dType,dat,gamma0,tau0,alpha0,beta0,nMC,nBI)
+
+}
+
+

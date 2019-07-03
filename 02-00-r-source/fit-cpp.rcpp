@@ -1,0 +1,624 @@
+
+
+require(mvtnorm);
+require(Rcpp);
+require(RcppArmadillo);
+
+
+
+## create R function to identify scale parameter via numerical grid search;
+
+
+
+
+sourceCpp(code='
+ 
+// [[Rcpp::depends(RcppArmadillo)]]
+#include <RcppArmadillo.h>
+#include <cmath>
+using namespace Rcpp;
+  
+
+// utility functions;
+double abs(double x) { if (x<0) { return -1.0*x; } return x; }
+double logit(double x) { return log(x) - log(1-x); }
+double logistic(double x) { return exp(x) / ( 1 + exp(x) ); }
+
+
+// [[Rcpp::export]]
+double logPostCPP(arma::vec parms, arma::ivec dType, arma::mat dat, arma::mat icov)
+{
+  // compute posterior contribution for cpp prior;
+  double logPost = 0;
+
+  // determine number of indications;
+  int J = dType.size();  
+
+  // create container for treatment effects;
+  arma::vec trt_parm(J);
+
+  // integer index for parameter vector location;
+  int idx = 0;
+
+  double mu;
+  int s;
+  for (int j=0;j<J;j++) { 
+  
+     trt_parm(j) = parms(idx+1);
+
+     if (dType(j)==0) {   
+         s        = 0;
+         mu       = std::max(std::min(parms(idx),0.999),0.001);
+         logPost += dat(j,1+s)*log(mu) + (dat(j,0+s)-dat(j,1+s))*log(1-mu); 
+
+         s        = 3;
+         mu       = std::max(std::min(parms(idx)+parms(idx+1),0.999),0.001);
+         logPost += dat(j,1+s)*log(mu) + (dat(j,0+s)-dat(j,1+s))*log(1-mu); ; 
+
+         idx+=2;
+     }
+     else if (dType(j)==1) {  
+         s        = 0; 
+         mu       = parms(idx);
+         logPost += -dat(j,0+s)*log(parms(idx+2)) - 0.5*dat(j,0+s)/pow(parms(idx+2),2)*(dat(j,2+s) - 2*dat(j,1+s)*mu + pow(mu,2)); 
+
+         s        = 3;
+         mu       = parms(idx)+parms(idx+1);
+         logPost += -dat(j,0+s)*log(parms(idx+2)) - 0.5*dat(j,0+s)/pow(parms(idx+2),2)*(dat(j,2+s) - 2*dat(j,1+s)*mu + pow(mu,2)); 
+     
+         idx+=3;
+     }
+  }
+  logPost   += -0.5*J*log(2*M_PI)-0.5*log(det(inv(icov))) -0.5*as_scalar(trt_parm.t()*icov*trt_parm);
+  return logPost;
+}
+
+// [[Rcpp::export]]
+double logPostCPPRandom(arma::vec parms, arma::ivec dType, arma::mat dat, arma::vec sd, double rho0, double phi0)
+{
+  // compute posterior contribution for cpp prior;
+  double logPost = 0;
+
+  // determine number of indications;
+  int J = dType.size();  
+
+  // create container for treatment effects;
+  arma::vec trt_parm(J);
+
+  // integer index for parameter vector location;
+  int idx = 0;
+
+  int rhoID = parms.size()-1;
+
+  // Construct CPP covariance matrix;
+  arma::mat cov(J,J);
+  for (int r=0;r<J;r++) {
+  for (int c=0;c<J;c++) {
+      if (r==c) { cov(r,c) = pow(sd[r],2);    }
+      else      { cov(r,c) = sd[r]*sd[c]*parms(rhoID); }
+  }
+  }
+  arma::mat icov = inv(cov);
+
+  double mu;
+  int s;
+  for (int j=0;j<J;j++) { 
+  
+     trt_parm(j) = parms(idx+1);
+
+     if (dType(j)==0) {   
+         s        = 0;
+         mu       = std::max(std::min(parms(idx),0.999),0.001);
+         logPost += dat(j,1+s)*log(mu) + (dat(j,0+s)-dat(j,1+s))*log(1-mu); 
+
+         s        = 3;
+         mu       = std::max(std::min(parms(idx)+parms(idx+1),0.999),0.001);
+         logPost += dat(j,1+s)*log(mu) + (dat(j,0+s)-dat(j,1+s))*log(1-mu); ; 
+
+         idx+=2;
+     }
+     else if (dType(j)==1) {  
+         s        = 0; 
+         mu       = parms(idx);
+         logPost += -dat(j,0+s)*log(parms(idx+2)) - 0.5*dat(j,0+s)/pow(parms(idx+2),2)*(dat(j,2+s) - 2*dat(j,1+s)*mu + pow(mu,2)); 
+
+         s        = 3;
+         mu       = parms(idx)+parms(idx+1);
+         logPost += -dat(j,0+s)*log(parms(idx+2)) - 0.5*dat(j,0+s)/pow(parms(idx+2),2)*(dat(j,2+s) - 2*dat(j,1+s)*mu + pow(mu,2)); 
+     
+         idx+=3;
+     }
+  }
+
+  logPost   += -0.5*J*log(2*M_PI)-0.5*log(det(inv(icov))) -0.5*as_scalar(trt_parm.t()*icov*trt_parm);
+  logPost   += rho0*phi0*log(parms(rhoID)) + (1-rho0)*phi0*log(1-parms(rhoID));
+  return logPost;
+}
+
+
+
+arma::vec slice_fcs_CPP( double (*logfn)(arma::vec parms, arma::ivec dType, arma::mat dat, arma::mat icov),
+                                     arma::vec parms, 
+                                     const arma::ivec & dType,
+                                     const arma::mat & dat, 
+                                     const arma::mat & icov,
+                                     const arma::vec & wv,
+                                     const arma::vec & lowerv,
+                                     const arma::vec & upperv,
+                                     const int m = 10) 
+{
+	int P = parms.n_rows;
+	double b0, f0, f0_L, f0_R, f0_x1, h0, L, R, V, J, K,w,lower,upper;
+	  
+		for (int p = 0; p < P; p++) 
+		{
+			// create vector of parameters to modify for slice sampling;
+			arma::vec parm0 = parms;
+
+            w     = wv[p];
+            lower = lowerv[p];
+            upper = upperv[p];
+                
+			if (lower==upper)
+			{
+				parms(p) = lower;
+			}
+            else
+            {
+			  // current value of the parameter in question;
+			  b0 = parm0(p);
+			
+			  // calculate current full conditional value;
+			  f0 = logfn(parm0,dType,dat,icov);
+
+			  // calculate height of the horizontal slice;
+			  h0 = f0 - ::Rf_rexp(1.0);		
+
+			  // Calculate initial horizontal interval;
+			  L = parm0(p) - ::Rf_runif(0.0,1.0)*w;
+			  R = L+w;  
+
+			  L = std::max(L,lower);
+			  R = std::min(R,upper);
+			  
+			  // Step out;
+			  V = ::Rf_runif(0.0,1.0);
+			  J = floor(m*V);
+			  K = (m-1)-J;	
+
+			  parm0(p) = L; f0_L = logfn(parm0,dType,dat,icov);
+			  parm0(p) = R; f0_R = logfn(parm0,dType,dat,icov); 
+
+			  while(J>0 and h0<f0_L and L>=lower)
+			  {
+				L        = L-w; if (L<=lower) {L=lower;}
+				J        = J-1;
+				parm0(p) = L; 
+				f0_L     = logfn(parm0,dType,dat,icov);
+			  }
+			  while(K>0 and h0<f0_R and R<=upper)
+			  {
+				R        = R+w; if (R>=upper) {R=upper;}
+				K        = K-1;
+				parm0(p) = R; 
+				f0_R     = logfn(parm0,dType,dat,icov);
+			  }			
+
+
+			  // perform rejection sampling;
+			  int stop  = 0;
+			  while(stop == 0)
+			  {
+				parm0(p)     = L + ::Rf_runif(0.0,1.0)*(R-L);
+				f0_x1        = logfn(parm0,dType,dat,icov);
+
+				if      ( h0       <  f0_x1 ) { parms(p) = parm0(p); stop = 1;  }
+				else if ( parm0(p) <  b0    ) { L = parm0(p);                   }
+				else if ( parm0(p) >= b0    ) { R = parm0(p);                   }
+				
+				if (-0.0000000001 <= L-R and L-R <= 0.0000000001)
+				{
+					parms(p)= 0.5*(L+R);
+					stop      = 1;
+				}
+			  }
+            }		
+		}
+	return parms;
+}
+
+arma::vec slice_fcs_CPPRandom(  double (*logfn)(arma::vec parms, arma::ivec dType, arma::mat dat, arma::vec sd, double rho0, double phi0),
+                                arma::vec parms, 
+                                const arma::ivec & dType,
+                                const arma::mat & dat,
+                                const arma::vec & sd, 
+                                const double & rho0,
+                                const double & phi0,
+                                const arma::vec & wv,
+                                const arma::vec & lowerv,
+                                const arma::vec & upperv,
+                                const int m = 10) 
+{
+
+		int P = parms.n_rows;
+	  
+		double b0, f0, f0_L, f0_R, f0_x1, h0, L, R, V, J, K,w,lower,upper;
+	  
+		for (int p = 0; p < P; p++) 
+		{
+			// create vector of parameters to modify for slice sampling;
+			arma::vec parm0 = parms;
+
+            w     = wv[p];
+            lower = lowerv[p];
+            upper = upperv[p];
+                
+			if (lower==upper)
+			{
+				parms(p) = lower;
+			}
+            else
+            {
+			  // current value of the parameter in question;
+			  b0 = parm0(p);
+			
+			  // calculate current full conditional value;
+			  f0 = logfn(parm0,dType,dat,sd,rho0,phi0);
+
+			  // calculate height of the horizontal slice;
+			  h0 = f0 - ::Rf_rexp(1.0);		
+
+			  // Calculate initial horizontal interval;
+			  L = parm0(p) - ::Rf_runif(0.0,1.0)*w;
+			  R = L+w;  
+
+			  L = std::max(L,lower);
+			  R = std::min(R,upper);
+			  
+			  // Step out;
+			  V = ::Rf_runif(0.0,1.0);
+			  J = floor(m*V);
+			  K = (m-1)-J;	
+
+			  parm0(p) = L; f0_L = logfn(parm0,dType,dat,sd,rho0,phi0);
+			  parm0(p) = R; f0_R = logfn(parm0,dType,dat,sd,rho0,phi0); 
+
+			  while(J>0 and h0<f0_L and L>=lower)
+			  {
+				L        = L-w; if (L<=lower) {L=lower;}
+				J        = J-1;
+				parm0(p) = L; 
+				f0_L     = logfn(parm0,dType,dat,sd,rho0,phi0);
+			  }
+			  while(K>0 and h0<f0_R and R<=upper)
+			  {
+				R        = R+w; if (R>=upper) {R=upper;}
+				K        = K-1;
+				parm0(p) = R; 
+				f0_R     = logfn(parm0,dType,dat,sd,rho0,phi0);
+			  }			
+
+
+			  // perform rejection sampling;
+			  int stop  = 0;
+			  while(stop == 0)
+			  {
+				parm0(p)     = L + ::Rf_runif(0.0,1.0)*(R-L);
+				f0_x1        = logfn(parm0,dType,dat,sd,rho0,phi0);
+
+				if      ( h0       <  f0_x1 ) { parms(p) = parm0(p); stop = 1;  }
+				else if ( parm0(p) <  b0    ) { L = parm0(p);                   }
+				else if ( parm0(p) >= b0    ) { R = parm0(p);                   }
+				
+				if (-0.0000000001 <= L-R and L-R <= 0.0000000001)
+				{
+					parms(p)= 0.5*(L+R);
+					stop      = 1;
+				}
+			  }
+            }		
+		}
+		return parms;
+}
+
+// [[Rcpp::export]]
+arma::mat fitCPP(arma::ivec dType, arma::mat dat, arma::vec sd, double rho, int nMC, int nBI)
+{
+    
+  // Determine number of indications;	
+  int J = dType.n_rows;
+
+  // Construct CPP covariance matrix;
+  arma::mat cov(J,J);
+  for (int r=0;r<J;r++) {
+  for (int c=0;c<J;c++) {
+    if (r==c) { cov(r,c) = pow(sd[r],2);    }
+    else      { cov(r,c) = sd[r]*sd[c]*rho; }
+  }
+  }
+
+  // Invert CPP covariance matrix;
+  // Construct & initialize width and parameter space boundary vectors;
+  arma::mat icov = inv(cov);
+  //Rcpp::Rcout << icov << std::endl;
+
+  // Construct & initialize parameter vector;
+  int P = 0;
+  for (int j=0;j<J;j++) {  P += (dType(j)==0)*2 + (dType(j)==1)*3; }
+
+  arma::vec parms(P);
+  arma::vec wv(P);
+  arma::vec lowerv(P);
+  arma::vec upperv(P);   
+
+  int idx = 0;
+  for (int j=0;j<J;j++) {  
+   if (dType(j)==0) 
+   { 
+     parms[idx]    = dat(j,1)/dat(j,0); wv[idx]   =   0.20;  lowerv[idx]   =  0.0000;   upperv[idx]   = 1.0000;
+     parms[idx+1]  = 0;                 wv[idx+1] =   0.20;  lowerv[idx+1] = -10*sd[j]; upperv[idx+1] = 10*sd[j];                
+     idx          += 2; 
+   }
+   else if (dType(j)==1) 
+   { 
+     parms[idx]    = dat(j,1);          wv[idx]   =   1.00; lowerv[idx]   = -10*sd[j]; upperv[idx]   = 10*sd[j];    
+     parms[idx+1]  = 0;                 wv[idx+1] =   1.00; lowerv[idx+1] = -10*sd[j]; upperv[idx+1] = 10*sd[j]; 
+     parms[idx+2]  = 1;                 wv[idx+2] =   0.5;  lowerv[idx+2] = 0.0001;    upperv[idx+2] = 500; 
+     idx          += 3; 
+   }
+  }  
+
+  // Construct container for samples;
+  arma::mat samples(nMC,P);
+
+  for (int s=-nBI;s<nMC;s++) 
+  {
+      parms = slice_fcs_CPP(logPostCPP,parms,dType,dat,icov,wv,lowerv,upperv);
+
+	if (s>=0)
+      {
+          samples.row(s) = parms.t();
+      }
+  }
+  return(samples);
+}
+
+// [[Rcpp::export]]
+arma::mat fitCPPRandom(arma::ivec dType, arma::mat dat, arma::vec sd, double rho0, double phi0, int nMC, int nBI)
+{
+    
+  // Determine number of indications;	
+  int J = dType.n_rows;
+
+  // Construct & initialize parameter vector;
+  int P = 0;
+  for (int j=0;j<J;j++) {  P += (dType(j)==0)*2 + (dType(j)==1)*3; }
+  P=P+1;
+
+  arma::vec parms(P);
+  arma::vec wv(P);
+  arma::vec lowerv(P);
+  arma::vec upperv(P);   
+
+  int idx = 0;
+  for (int j=0;j<J;j++) {  
+   if (dType(j)==0) 
+   { 
+     parms[idx]    = dat(j,1)/dat(j,0); wv[idx]   =   0.20;  lowerv[idx]   =  0.0000;   upperv[idx]   = 1.0000;
+     parms[idx+1]  = 0;                 wv[idx+1] =   0.20;  lowerv[idx+1] = -10*sd[j]; upperv[idx+1] = 10*sd[j];                
+     idx          += 2; 
+   }
+   else if (dType(j)==1) 
+   { 
+     parms[idx]    = dat(j,1);          wv[idx]   =   1.00; lowerv[idx]   = -10*sd[j]; upperv[idx]   = 10*sd[j];    
+     parms[idx+1]  = 0;                 wv[idx+1] =   1.00; lowerv[idx+1] = -10*sd[j]; upperv[idx+1] = 10*sd[j]; 
+     parms[idx+2]  = 1;                 wv[idx+2] =   0.5;  lowerv[idx+2] = 0.0001;    upperv[idx+2] = 500; 
+     idx          += 3; 
+   }
+  }  
+     parms[idx]    = 0.5;               wv[idx]   =   0.1;  lowerv[idx  ] = 0.0001;    upperv[idx]   = 0.9999;
+
+  // Construct container for samples;
+  arma::mat samples(nMC,P);
+
+  for (int s=-nBI;s<nMC;s++) 
+  {
+      parms = slice_fcs_CPPRandom(logPostCPPRandom,parms,dType,dat,sd,rho0,phi0,wv,lowerv,upperv);
+
+	if (s>=0)
+      {
+          samples.row(s) = parms.t();
+      }
+  }
+  return(samples);
+}
+
+arma::mat genDat(arma::ivec & dType, arma::rowvec & gParm, arma::ivec & npg)
+{
+   int J = dType.n_rows;
+
+   arma::mat dat(J,3*J,arma::fill::zeros);
+
+   int p=0;
+   double mean,x,y,yy;
+   
+   for (int j=0; j<J; j++)
+   {
+     for (int t=0;t<=1;t++)
+     {
+        if (dType[j]==0)      { mean = std::max(std::min(gParm[p] + gParm[p+1]*(t==1),0.9999),0.0001); }
+        else if (dType[j]==1) { mean =                   gParm[p] + gParm[p+1]*(t==1);                 } 
+             
+        if (dType[j]==0) 
+        {
+            x = R::rbinom(npg[j],mean);
+            dat(j,0 + t*3) = npg[j];
+            dat(j,1 + t*3) = x;
+            dat(j,2 + t*3) = pow(x,2);
+        }
+        else 
+        {
+            y = 0; yy = 0;
+            for (int n=0;n<npg[j];n++)
+            {
+               x  = R::rnorm(mean,gParm[p+2]);
+               y += x;
+               yy += pow(x,2);
+            } 
+            dat(j,0 + t*3) = npg[j];
+            dat(j,1 + t*3) = y/npg[j];
+            dat(j,2 + t*3) = yy/npg[j];
+        }
+      }
+      if (dType[j]==0)      { p+=2; } 
+      else if (dType[j]==1) { p+=3; } 
+   }
+   return dat;
+}
+
+arma::rowvec processSamples(arma::mat & samp, arma::ivec & dType, int & P,arma::vec & eqm)
+{
+   int nMC = samp.n_rows;
+   int J   = dType.size();
+
+   arma::rowvec studyResults(P+2*J+2,arma::fill::zeros);
+
+   // compute posterior means;
+   arma::mat col_means = sum(samp)/nMC;
+   for (int p=0;p<P;p++)
+   {
+      studyResults[p] = col_means(0,p); 
+   }
+   
+   arma::mat rej(nMC,J);
+   arma::vec gRej(nMC,arma::fill::zeros);
+
+   int p,g;
+   for (int m=0;m<nMC;m++)
+   {
+      p=0;
+      g=0;
+   	for (int j=0; j<J; j++)
+      {
+         int r = (abs(samp(m,p+1))<eqm[j]);
+         rej(m,j) = r;
+         g       += r;
+
+         if      (dType[j]==0) { p+=2; } 
+         else if (dType[j]==1) { p+=3; } 
+      }
+	gRej[m] = (g==J);
+   }
+
+   for (int j=0; j<J; j++)
+   {
+      double r = (double) sum(rej.col(j))/nMC;
+      studyResults[P+j]   = r;
+      studyResults[P+J+j] = (r>0.95);
+   }
+   double r = (double) sum(gRej)/nMC;
+   studyResults[P+2*J]   = r;
+   studyResults[P+2*J+1] = (r>0.95);
+
+   return studyResults;
+}
+
+
+// [[Rcpp::export]]
+arma::mat estCPPDesign(arma::ivec dType, arma::mat sp, arma::ivec npg, arma::vec sd, double rho,arma::vec eqm, int nSIM, int nMC, int nBI)
+{
+
+     // Determine number of indications;	
+     int J = dType.n_rows;
+
+     // Determine number of sampling prior components;
+     int R = sp.n_rows;
+
+     // Count number of parameters;
+     int P = 0;
+     for (int j=0;j<J;j++) {  P += (dType(j)==0)*2 + (dType(j)==1)*3; }     
+     int Q = P + 2*J + 2;
+
+     // create container for simulation results;
+     arma::mat studyResults(nSIM,Q,arma::fill::zeros);
+     
+
+     for (int i=0; i<nSIM; i++)
+     {
+         // select parameter value;
+         int s = (int) R::runif(0,R);         
+         arma::rowvec gParm = sp.row(s);
+
+         // generate data;
+         arma::mat dat = genDat(dType,gParm,npg);
+
+         // fit model with CPP;
+         arma::mat samp = fitCPP(dType,dat,sd,rho,nMC,nBI);
+
+         // process MCMC samples;
+         studyResults.row(i) = processSamples(samp,dType,P,eqm);
+     }
+     return mean(studyResults);     
+}
+
+
+// [[Rcpp::export]]
+arma::mat estCPPDesignRandom(arma::ivec dType, arma::mat sp, arma::ivec npg, arma::vec sd, double rho0,double phi0,arma::vec eqm, int nSIM, int nMC, int nBI)
+{
+
+     // Determine number of indications;	
+     int J = dType.n_rows;
+
+     // Determine number of sampling prior components;
+     int R = sp.n_rows;
+
+     // Count number of parameters;
+     int P = 0;
+     for (int j=0;j<J;j++) {  P += (dType(j)==0)*2 + (dType(j)==1)*3; }
+     P += 1;
+     
+     int Q = P + 2*J + 2;
+
+     // create container for simulation results;
+     arma::mat studyResults(nSIM,Q,arma::fill::zeros);
+     
+
+     for (int i=0; i<nSIM; i++)
+     {
+         // select parameter value;
+         int s = (int) R::runif(0,R);         
+         arma::rowvec gParm = sp.row(s); //Rcpp::Rcout << gParm << std::endl;
+
+         // generate data;
+         arma::mat dat = genDat(dType,gParm,npg);
+
+         // fit model with CPP (random rho);
+         arma::mat samp = fitCPPRandom(dType,dat,sd,rho0,phi0,nMC,nBI);
+     
+         // process MCMC samples;
+         studyResults.row(i) = processSamples(samp,dType,P,eqm);
+     }
+     return mean(studyResults);     
+}
+
+'
+)
+
+
+if (FALSE){
+
+dType = c(0,1,1);
+sp    = matrix(c(0.81,0.00,0.00,0.00,1.4,0.0,-0.6,1.4),1,8);
+npg   = c(300,120,150);
+sd    = c(0.2,1.2,1.2);
+rho   = 0.5;
+eqm   = c(0.1,0.6,0.6);
+nSIM  = 20000;
+nMC   = 25000;
+nBI   = 100;
+
+x=estCPPDesign(dType,sp,npg,sd,rho,eqm,nSIM,nMC,nBI);
+
+}
+
+

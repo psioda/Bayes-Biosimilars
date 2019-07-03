@@ -1,0 +1,194 @@
+
+
+require(mvtnorm);
+require(Rcpp);
+require(RcppArmadillo);
+
+
+
+## create R function to identify scale parameter via numerical grid search;
+
+
+
+
+sourceCpp(code='
+ 
+// [[Rcpp::depends(RcppArmadillo)]]
+#include <RcppArmadillo.h>
+#include <cmath>
+using namespace Rcpp;
+  
+
+// utility functions;
+double abs(double x) { if (x<0) { return -1.0*x; } return x; }
+double logit(double x) { return log(x) - log(1-x); }
+double logistic(double x) { return exp(x) / ( 1 + exp(x) ); }
+
+// [[Rcpp::export]]
+double logCPP(arma::vec parms, arma::mat icov)
+{
+  //double mvn = -0.5*J*log(2*M_PI)-0.5*log(det(inv(icov)));
+
+  return -0.5*as_scalar(parms.t()*icov*parms);
+}
+
+
+arma::vec slice_fcs( double (*logfn)(arma::vec parms, arma::mat icov),
+                                     arma::vec parms, 
+                                     const arma::mat & icov,
+                                     const arma::vec & wv,
+                                     const arma::vec & lowerv,
+                                     const arma::vec & upperv,
+                                     const int m = 10) 
+	{
+
+		int P = parms.n_rows;
+	  
+		double b0, f0, f0_L, f0_R, f0_x1, h0, L, R, V, J, K,w,lower,upper;
+	  
+		for (int p = 0; p < P; p++) 
+		{
+			// create vector of parameters to modify for slice sampling;
+			arma::vec parm0 = parms;
+
+			w     = wv[p];
+            lower = lowerv[p];
+            upper = upperv[p];
+                
+			if (lower==upper)
+			{
+				parms(p) = lower;
+			}
+            else
+            {
+			  // current value of the parameter in question;
+			  b0 = parm0(p);
+			
+			  // calculate current full conditional value;
+			  f0 = logfn(parm0,icov);
+
+			  // calculate height of the horizontal slice;
+			  h0 = f0 - ::Rf_rexp(1.0);		
+
+			  // Calculate initial horizontal interval;
+			  L = parm0(p) - ::Rf_runif(0.0,1.0)*w;
+			  R = L+w;  
+			  
+			  L = std::max(L,lower);
+			  R = std::min(R,upper);
+		
+			  // Step out;
+			  V = ::Rf_runif(0.0,1.0);
+			  J = floor(m*V);
+			  K = (m-1)-J;	
+
+			  parm0(p) = L; f0_L = logfn(parm0,icov);
+			  parm0(p) = R; f0_R = logfn(parm0,icov); 
+
+			  while(J>0 and h0<f0_L and L>=lower)
+			  {
+				L        = L-w; if (L<=lower) {L=lower;}
+				J        = J-1;
+				parm0(p) = L; 
+				f0_L     = logfn(parm0,icov);
+			  }
+			  while(K>0 and h0<f0_R and R<=upper)
+			  {
+				R        = R+w; if (R>=upper) {R=upper;}
+				K        = K-1;
+				parm0(p) = R; 
+				f0_R     = logfn(parm0,icov);
+			  }			
+
+
+			  // perform rejection sampling;
+			  int stop  = 0;
+			  while(stop == 0)
+			  {
+				parm0(p)     = L + ::Rf_runif(0.0,1.0)*(R-L);
+				f0_x1        = logfn(parm0,icov);
+
+				if      ( h0       <  f0_x1 ) { parms(p) = parm0(p); stop = 1;  }
+				else if ( parm0(p) <  b0    ) { L = parm0(p);                   }
+				else if ( parm0(p) >= b0    ) { R = parm0(p);                   }
+				
+				if (-0.0000000001 <= L-R and L-R <= 0.0000000001)
+				{
+					parms(p)= 0.5*(L+R);
+					stop      = 1;
+				}
+			  }
+            }		
+		}
+
+		return parms;
+	}
+
+
+// [[Rcpp::export]]
+arma::mat sampleCPP(arma::vec sd, double rho, arma::vec lowerv, arma::vec upperv, int nMC, int nBI)
+{
+  // Determine number of indications;	
+  int J = sd.n_rows;
+
+  // Construct CPP covariance matrix & inverse;
+  arma::mat cov(J,J);
+  for (int r=0;r<J;r++) {
+  for (int c=0;c<J;c++) {
+    if (r==c) { cov(r,c) = pow(sd[r],2);    }
+    else      { cov(r,c) = sd[r]*sd[c]*rho; }
+  }
+  }
+  arma::mat icov = inv(cov);
+
+
+  // Construct & initialize parameter vector;
+  int P = J;
+
+  arma::vec parms(P);
+  arma::vec wv(P);
+  for (int j=0;j<J;j++) 
+  {  
+     parms[j] = (lowerv[j] + upperv[j])/2; 
+     wv[j]    = 1.5*sd[j]; 
+  }
+   
+
+  // Construct container for samples;
+  arma::mat samples(nMC,P);
+
+
+  for (int s=-nBI;s<nMC;s++) 
+  {
+      parms = slice_fcs(logCPP,parms,icov,wv,lowerv,upperv);
+
+	if (s>=0)
+      {
+          samples.row(s) = parms.t();
+      }
+  }
+
+  return(samples);
+}
+
+
+'
+)
+
+
+if (FALSE){
+
+library(coda);
+set.seed(1);
+sd  = c(0.2,1.2,1.2);
+rho = 0.5946817468;
+lower.lim=c(-20,-20,-20);
+upper.lim=c(20,20,20);
+plot(mcmc(sampleCPP(sd,rho,lower.lim,upper.lim,nMC=500000,nBI=100)));
+
+
+}
+
+
+
+

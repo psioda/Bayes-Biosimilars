@@ -1,0 +1,322 @@
+1                                                          The SAS System                              20:21 Thursday, June 20, 2019
+
+NOTE: Copyright (c) 2002-2012 by SAS Institute Inc., Cary, NC, USA. 
+NOTE: SAS (r) Proprietary Software 9.4 (TS1M3) 
+      Licensed to UNIVERSITY OF NORTH CAROLINA CHAPEL HILL - SFA T&R, Site 70084073.
+NOTE: This session is executing on the Linux 3.10.0-957.el7.x86_64 (LIN X64) platform.
+
+
+
+NOTE: Updated analytical products:
+      
+      SAS/STAT 14.1
+      SAS/ETS 14.1
+      SAS/OR 14.1
+      SAS/IML 14.1
+      SAS/QC 14.1
+
+NOTE: Additional host information:
+
+ Linux LIN X64 3.10.0-957.el7.x86_64 #1 SMP Thu Oct 4 20:48:51 UTC 2018 x86_64 Red Hat Enterprise Linux Server release 7.6 (Maipo) 
+
+You are running SAS 9. Some SAS 8 files will be automatically converted 
+by the V9 engine; others are incompatible.  Please see 
+http://support.sas.com/rnd/migration/planning/platform/64bit.html
+
+PROC MIGRATE will preserve current SAS file attributes and is 
+recommended for converting all your SAS libraries from any 
+SAS 8 release to SAS 9.  For details and examples, please see
+http://support.sas.com/rnd/migration/index.html
+
+
+This message is contained in the SAS news file, and is presented upon
+initialization.  Edit the file "news" in the "misc/base" directory to
+display site-specific news and information in the program log.
+The command line option "-nonews" will prevent this display.
+
+
+
+
+NOTE: SAS initialization used:
+      real time           0.14 seconds
+      cpu time            0.03 seconds
+      
+1          %macro setup(program,user);
+2          
+3          option ls=150 ps=90;
+4            /** close ODS destinations **/
+5            ods html close;
+6            ods listing close;
+7          
+8            /** clear work library **/
+9            proc datasets library=work noprint kill; run; quit;
+10         
+11           /** delete local macro variables **/
+12           data vars;
+13             set sashelp.vmacro;
+14           run;
+15           data _null_;
+16             set vars;
+17             temp=lag(name);
+2                                                          The SAS System                              20:21 Thursday, June 20, 2019
+
+18             if scope='GLOBAL' and substr(name,1,3) ne 'SYS' and temp ne name then
+19               call execute('%symdel '||trim(left(name))||';');
+20           run;
+21         
+22           /** obtain location of SAS program (requires program to be saved) **/
+23           /** also create needed macro variables for various SAS libraries **/
+24           %global ROOT FILE_PATH IML_PATH MACRO_PATH OUT_PATH RES_PATH SLASH;
+25           data te;
+26            set sashelp.vextfl;
+27            where find(upcase(xPath),upcase("&program"));
+28         
+29            filePath = substr(xPath,1,index(xPath,"&program")-1);
+30            outPath  = tranwrd(filePath,'PROGRAMS','OUTPUT');
+31            root     = substr(xPath,1,index(xPath,"github") + length("github"));
+32         
+33            call symput('ROOT'     ,strip(root));
+34            call symput('FILE_PATH',strip(filePath));
+35            call symput('SLASH'    ,strip(substr(strip(reverse(root)),1,1)));
+36           run;
+37         
+38         
+39         
+40            x "cd &ROOT.";
+41            %if &SYSSCP = WIN %then %do;
+42               filename folders pipe 'dir /A:D/B/S';
+43            %end;
+44            %else %do;
+45               filename folders pipe 'ls -d * ';
+46            %end;
+47         
+48            data directories;
+49              length path $500;
+50              infile folders dlmstr="$#&#&#";
+51              input path;
+52         	
+53         	   %if &SYSSCP = WIN %then %do;
+54                 if find(path,'00-sas-macros','i')  then call symput('MACRO_PATH',strip(strip(path)||"&slash."));
+55                 if find(path,'output','i')         then call symput('OUT_PATH',strip(strip(path)||"&slash."));
+56                 if find(path,'sas-data','i')       then call symput('RES_PATH',strip(strip(path)||"&slash."));
+57         	   %end;
+58         	   %else %do;
+59                 if find(path,'00-sas-macros','i')  then call symput('MACRO_PATH',strip("&root."||strip(path)||"&slash."));
+60                 if find(path,'output','i')         then call symput('OUT_PATH',strip("&root."||strip(path)||"&slash."));
+61                 if find(path,'sas-data','i')       then call symput('RES_PATH',strip("&root."||strip(path)||"&slash."));
+62         	   %end;
+63            run;
+64         
+65            libname results "&RES_PATH.";
+66            libname output  "&OUT_PATH.";
+67         
+68         
+69            %put &=ROOT;
+70            %put &=FILE_PATH;
+71            %put &=MACRO_PATH;
+72            %put &=OUT_PATH;
+73            %put &=RES_PATH;
+74         
+75         %mend;
+3                                                          The SAS System                              20:21 Thursday, June 20, 2019
+
+76         
+77         %setup(03-Sampling-Priors.sas,Psioda);
+NOTE: Deleting WORK.SASMACR (memtype=CATALOG).
+NOTE: File WORK.SASMACR (memtype=CATALOG) cannot be deleted because it is in use.
+NOTE: PROCEDURE DATASETS used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.00 seconds
+      
+
+NOTE: There were 70 observations read from the data set SASHELP.VMACRO.
+NOTE: The data set WORK.VARS has 70 observations and 4 variables.
+NOTE: DATA statement used (Total process time):
+      real time           0.03 seconds
+      cpu time            0.00 seconds
+      
+
+
+NOTE: There were 70 observations read from the data set WORK.VARS.
+NOTE: DATA statement used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.01 seconds
+      
+
+
+NOTE: There were 1 observations read from the data set SASHELP.VEXTFL.
+      WHERE FIND(UPCASE(xPath), '03-SAMPLING-PRIORS.SAS');
+NOTE: The data set WORK.TE has 1 observations and 12 variables.
+NOTE: DATA statement used (Total process time):
+      real time           0.01 seconds
+      cpu time            0.01 seconds
+      
+
+
+NOTE: The infile FOLDERS is:
+      Pipe command="ls -d * "
+
+NOTE: 11 records were read from the infile FOLDERS.
+      The minimum record length was 14.
+      The maximum record length was 18.
+NOTE: The data set WORK.DIRECTORIES has 11 observations and 1 variables.
+NOTE: DATA statement used (Total process time):
+      real time           0.01 seconds
+      cpu time            0.01 seconds
+      
+
+NOTE: Libref RESULTS was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /proj/psiodalab/projects/bayesDesignSimilars/github/03-03-sas-data
+NOTE: Libref OUTPUT was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /proj/psiodalab/projects/bayesDesignSimilars/github/03-02-sas-output
+ROOT=/proj/psiodalab/projects/bayesDesignSimilars/github/
+FILE_PATH=/proj/psiodalab/projects/bayesDesignSimilars/github/03-01-sas-programs/
+MACRO_PATH=/proj/psiodalab/projects/bayesDesignSimilars/github/03-00-sas-macros/
+OUT_PATH=/proj/psiodalab/projects/bayesDesignSimilars/github/03-02-sas-output/
+RES_PATH=/proj/psiodalab/projects/bayesDesignSimilars/github/03-03-sas-data/
+78         
+79         
+80         
+81         data sp;
+82          merge results.ss_normal(rename=(alpha=normal_alpha power=normal_power npergroup=normal_n))
+83                results.ss_binomial(rename=(alpha=binary_alpha power=binary_power npergroup=binary_n));
+84         
+85            call symput('EQM1',strip(put(nullProportionDiff,best.)));
+86            call symput('EQM2',strip(put(UpperBound,best.)));
+87         run;
+
+WARNING: No BY statement was specified for a MERGE statement.
+NOTE: There were 1 observations read from the data set RESULTS.SS_NORMAL.
+NOTE: There were 1 observations read from the data set RESULTS.SS_BINOMIAL.
+NOTE: The data set WORK.SP has 1 observations and 12 variables.
+NOTE: DATA statement used (Total process time):
+      real time           0.02 seconds
+      cpu time            0.00 seconds
+      
+
+88         
+89         proc import file="&root.&slash.02-02-r-output&slash.cpp-hyperparameters-percent-reduction.csv" out = cpp replace;
+89       !                                                                                                                   run;
+
+89       !                                                                                                                        quit;
+90          /**********************************************************************
+91          *   PRODUCT:   SAS
+92          *   VERSION:   9.4
+93          *   CREATOR:   External File Interface
+94          *   DATE:      20JUN19
+95          *   DESC:      Generated SAS Datastep Code
+96          *   TEMPLATE SOURCE:  (None Specified.)
+4                                                                   The SAS System                                       20:21 Thursday, June 20, 2019
+
+97          ***********************************************************************/
+98             data WORK.CPP    ;
+99             %let _EFIERR_ = 0; /* set the ERROR detection macro variable */
+100            infile '/proj/psiodalab/projects/bayesDesignSimilars/github//02-02-r-output/cpp-hyperparameters-percent-reduction.csv' delimiter = ','
+100      ! MISSOVER DSD lrecl=32767 firstobs=2 ;
+101               informat pi0 best32. ;
+102               informat pi1 best32. ;
+103               informat sd1 best32. ;
+104               informat sd2 best32. ;
+105               informat rho best32. ;
+106               format pi0 best12. ;
+107               format pi1 best12. ;
+108               format sd1 best12. ;
+109               format sd2 best12. ;
+110               format rho best12. ;
+111            input
+112                        pi0
+113                        pi1
+114                        sd1
+115                        sd2
+116                        rho
+117            ;
+118            if _ERROR_ then call symputx('_EFIERR_',1);  /* set ERROR detection macro variable */
+119            run;
+
+NOTE: The infile '/proj/psiodalab/projects/bayesDesignSimilars/github//02-02-r-output/cpp-hyperparameters-percent-reduction.csv' is:
+      Filename=/proj/psiodalab/projects/bayesDesignSimilars/github//02-02-r-output/cpp-hyperparameters-percent-reduction.csv,
+      Owner Name=psioda,Group Name=rc_psiodalab_psx,
+      Access Permission=-rw-r--r--,
+      Last Modified=20Jun2019:20:15:32,
+      File Size (bytes)=192669
+
+NOTE: 5800 records were read from the infile 
+      '/proj/psiodalab/projects/bayesDesignSimilars/github//02-02-r-output/cpp-hyperparameters-percent-reduction.csv'.
+      The minimum record length was 19.
+      The maximum record length was 34.
+NOTE: The data set WORK.CPP has 5800 observations and 5 variables.
+NOTE: DATA statement used (Total process time):
+      real time           0.01 seconds
+      cpu time            0.01 seconds
+      
+
+5800 rows created in WORK.CPP from /proj/psiodalab/projects/bayesDesignSimilars/github//02-02-r-output/cpp-hyperparameters-percent-reduction.csv.
+  
+  
+  
+NOTE: WORK.CPP data set was successfully created.
+NOTE: The data set WORK.CPP has 5800 observations and 5 variables.
+NOTE: PROCEDURE IMPORT used (Total process time):
+      real time           0.36 seconds
+      cpu time            0.08 seconds
+      
+
+120        
+121        data cpp;
+122         set cpp;
+123         piChange = round((pi1-pi0)/(1-pi0),0.001) * 100;
+124        run;
+
+NOTE: There were 5800 observations read from the data set WORK.CPP.
+NOTE: The data set WORK.CPP has 5800 observations and 6 variables.
+NOTE: DATA statement used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.00 seconds
+      
+
+125        
+126        data cpp_select;
+127         set cpp;
+128         where ( pi0 = 0.33 and piChange in (00, 25, 50, 75) ) or
+129               ( pi0 = 0.50 and piChange in (00, 25, 50, 75) ) or
+130        	   ( pi0 = 0.67 and piChange in (00, 25, 50, 75) ) or
+131               ( pi0 = 0.80 and piChange in (00, 25, 50, 75) );
+132        run;
+
+NOTE: There were 16 observations read from the data set WORK.CPP.
+      WHERE ((pi0=0.33) and piChange in (0, 25, 50, 75)) or ((pi0=0.5) and piChange in (0, 25, 50, 75)) or ((pi0=0.67) and piChange in (0, 25, 50, 
+      75)) or ((pi0=0.8) and piChange in (0, 25, 50, 75));
+NOTE: The data set WORK.CPP_SELECT has 16 observations and 6 variables.
+NOTE: DATA statement used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.01 seconds
+      
+
+133        
+134        data sp_select;
+135         set cpp_select;
+136          if _n_ = 1 then set sp;
+5                                                                   The SAS System                                       20:21 Thursday, June 20, 2019
+
+137          eqm1 = nullProportionDiff;
+138          eqm2 = upperBound;
+139        run;
+
+NOTE: There were 16 observations read from the data set WORK.CPP_SELECT.
+NOTE: There were 1 observations read from the data set WORK.SP.
+NOTE: The data set WORK.SP_SELECT has 16 observations and 20 variables.
+NOTE: DATA statement used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.00 seconds
+      
+
+139      !      proc sort; by pi0 pi1 rho sd1 sd2; run;
+
+NOTE: There were 16 observations read from the data set WORK.SP_SELECT.
+NOTE: The data set WORK.SP_SELECT has 16 observations and 20 variables.
+NOTE: PROCEDURE SORT used (Total process time):
+      real time           0.00 seconds
+      cpu time            0.00 seconds
+      
